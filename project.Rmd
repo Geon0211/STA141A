@@ -1,0 +1,1902 @@
+---
+title: "STA 141A Project"
+author: "Geon Heo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(dplyr)
+library(ggplot2)
+#install.packages("ggcorrplot")
+library(ggcorrplot)
+library(gridExtra)
+library(lubridate)
+library(tidyverse)
+library(knitr)
+#install.packages("tsne")
+library(tsne)
+library(class)
+library(caret)
+#install.packages("ROCR")
+library(ROCR)
+```
+# Abstract
+
+There are two assumptions for prediction models. The first assumption is a prediction model would be made only with each session's data. The second assumption is a prediction model would contain time information because spikes indicate the number of spikes of neurons in time bins. Based on Exploratory Analysis, each session uses different brain areas and there are differences of average spikes over trials per brain areas. Additionally, we don't know which mouse's sex is male or female. Thus, it is hard to say merging all dataset among all sessions is good. And the each session prediction model shows higher performance than the prediction model that use all sessions information over average trials. Prediction performance on the test sets are lower than the result from __Session 1__ and __Session 18__, but I got 63% and 76% accuracies which is quite higher result.
+***
+
+# Introduction
+```{r}
+# Open session rds files and assign each session
+session=list()
+for(i in 1:18){
+  data <- file.path("C:\\Users\\Geon\\Downloads\\Winter 2024\\STA 141A\\STA141AProject\\Data",paste("session",i,'.rds', sep = ""))
+  session[[i]]=readRDS(data)
+  #print(session[[i]]$mouse_name)
+  #print(session[[i]]$date_exp)
+}
+
+```
+In this project, I'm going to analyze a subset of data collected by Steinmetz et al. (2019). Then, to build a predictive model to predict the outcome (i.e., feedback type) of each trial using the neural activity date (i.e., spike trains in `spks`) along with the stimuli (the left and right contrasts). Although Steinmetz's experiments were performed on a total of 10 mice over 39 sessions, I'm going to use 4 mice over 1 to 18 sessions. Each session consists of 6 columns and `mouse_name` and `date_exp`. Following 6 columns are available for each trial, namely
+
+- `feedback_type`: type of the feedback, 1 for success and -1 for failure
+- `contrast_left`: contrast of the left stimulus
+- `contrast_right`: contrast of the right stimulus
+- `time`: centers of the time bins for `spks`  
+- `spks`: numbers of spikes of neurons in the visual cortex in time bins defined in `time`
+- `brain_area`: area of the brain where each neuron lives
+
+__contrast left__ and __contrast right__ represent stimuli which took values {0, 0.25, 0.5, 1}. 0 means the absence of a stimulus. __feed back__ is determined by following,
+
+- When left contrast > right contrast, success (1) if turning the wheel to the right and failure (-1) otherwise.
+- When right contrast > left contrast, success (1) if turning the wheel to the left and failure (-1) otherwise.
+- When both left and right contrasts are zero, success (1) if holding the wheel still and failure (-1) otherwise.
+- When left and right contrasts are equal but non-zero, left or right will be randomly chosen (50%) as the correct choice.
+
+***
+
+# Exploratory Analysis
+```{r}
+# Summary session
+summary(session[[1]])
+ses.uni <- unique(session[[1]]$brain_area)
+
+```
+
+Above table shows how __Session 1__ looks like. __Contrast_left__, __contrast_right__, __feedback_type__, __spks__, and __time__ have the same lengths 114, however, the type of __spks__ and __time__ are a list which are different to others. Only __brain_area__ has a different number of length which is 734 that represents the number of area of the brain where each neuron lives. It means there are 734 neurons in __Session 1__, however, only `r ses.uni` of brain area used. If I extend the information from __Session 1__ to __Session 18__, the outcome is the following table.
+```{r}
+# Code from professor
+n.session=length(session)
+
+
+
+# in library tidyverse
+meta <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[i,1]=tmp$mouse_name;
+  meta[i,2]=tmp$date_exp;
+  meta[i,3]=length(unique(tmp$brain_area));
+  meta[i,4]=dim(tmp$spks[[1]])[1];
+  meta[i,5]=length(tmp$feedback_type);
+  meta[i,6]=mean(tmp$feedback_type+1)/2;
+  }
+kable(meta, format = "html", table.attr = "Class = 'table table-striped'", col.names = c("Mouse Name", "Exp Date", "# of Brain Area", "# of Neurons", "# of Trials", "Success Rate"), digits = 2, caption = "Summarize Session from 1 to 18 Dataset (Table 1)")
+total.trials = sum(meta$n_trials)
+
+
+# Table for how many time in each trial
+num.of.time1 = dim(table(session[[1]]$time[1]))
+num.of.time2 = dim(table(session[[2]]$time[1]))
+num.of.time3 = dim(table(session[[3]]$time[1]))
+num.of.time4 = dim(table(session[[4]]$time[1]))
+num.of.time5 = dim(table(session[[5]]$time[1]))
+num.of.time6 = dim(table(session[[6]]$time[1]))
+num.of.time7 = dim(table(session[[7]]$time[1]))
+num.of.time8 = dim(table(session[[8]]$time[1]))
+num.of.time9 = dim(table(session[[9]]$time[1]))
+num.of.time10 = dim(table(session[[10]]$time[1]))
+num.of.time11 = dim(table(session[[11]]$time[1]))
+num.of.time12 = dim(table(session[[12]]$time[1]))
+num.of.time13 = dim(table(session[[13]]$time[1]))
+num.of.time14 = dim(table(session[[14]]$time[1]))
+num.of.time15 = dim(table(session[[15]]$time[1]))
+num.of.time16 = dim(table(session[[16]]$time[1]))
+num.of.time17 = dim(table(session[[17]]$time[1]))
+num.of.time18 = dim(table(session[[18]]$time[1]))
+
+num.time.table <- data.frame(Session = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18),
+                             `# of Time` = c(num.of.time1, num.of.time2,num.of.time3, num.of.time4,num.of.time5, num.of.time6,num.of.time7, num.of.time8,num.of.time9, num.of.time10,num.of.time11, num.of.time12,num.of.time13, num.of.time14,num.of.time15, num.of.time16,num.of.time17, num.of.time18))
+num.table <- tibble(num.time.table)
+kable(num.table, format = "html", table.attr = "Class = 'table table-striped'", col.names = c("Session", "# of Time"), digits = 2, caption = "Number of Time in Each Trial in Each Session (Table 2)")
+
+
+
+
+```
+According to the __Table 1__, there are 3 experiments for __Cori__, 4 experiments for __Forssmann__ and __Hench__, and 7 experiments for __Lederberg__. In the __Table 1__, __Time__ is not represented but each trial consists 40 times. In __Table 2__, it shows each session's each trial has the same number of time. It means all trials consist 40 times experiments. In addition, each session has different number of brain areas even though it is the same mouse. 
+```{r}
+# Check each mouse use the same brain area
+cori <- list()
+fors <- list()
+hen <- list()
+led <- list()
+
+# For Cori
+for (i in 1:3){
+  cori = append(cori, unique(session[[i]]$brain_area))
+}
+
+# For Forssmann	
+for (i in 4:7){
+  fors <- append(fors, unique(session[[i]]$brain_area))
+}
+
+# For Hench
+for (i in 8:11){
+  hen = append(hen, unique(session[[i]]$brain_area))
+}
+
+
+# For Lederberg
+for (i in 12:18){
+  led <- append(led, unique(session[[i]]$brain_area))
+}
+
+cori_uni <- unique(cori)
+fors_uni <- unique(fors)
+hen_uni <- unique(hen)
+led_uni <- unique(led)
+
+a <- length(unique(cori))
+b <- length(unique(fors))
+c <- length(unique(hen))
+d <- length(unique(led))
+e = 8 + 5 + 11 # For Cori
+f = 11 + 10 + 5 + 8 # For Forssmann
+g = 15 + 12 + 13 + 6 # For Hench
+h = 12 + 15 + 10 + 8 + 6 + 6 + 10 # For Lederberg
+brain_table <- tibble(
+  name = c("Cori", "Forssmann", "Hench", "Lederberg"),
+  brain = c(a, b, c, d),
+  origin.num = c(e, f, g, h)
+)
+kable(brain_table, format = "html", table.attr = "Class = 'table table-striped'", col.names = c("Mouse", "# of Unique Brain Area","Original Total # of Unique Brain Area"), digits = 2, caption = "Number of Unique Brain Depends on Each Mouse (Table 3)")
+
+
+```
+Based on __Table 1__ and __Table 3__, 
+
+- The success rate seems to get increasing by doing more experiments. 
+- The number of neurons does not relate to the number of brain area (E.g. Bigger number of neurons does not guarantee larger number of brain areas)
+- The number of trials does not relate to the success rate (E.g. Bigger number of trials does not guarantee higher success rate)
+- The number of neurons does not relate to the success rate (E.g. Bigger number of neurons does not guarantee higher success rate)
+- The total number of unique brain area is different to the number of unique brain area (E.g. There are some brain areas used repeatedly)
+
+Since the purpose of this project is to build a predictive model, I'm going to conduct data analysis to find candidates of independent variables. Based on the from Table 1 to Table 3, I have two assumptions. 
+
+- The first assumption is `Feedback` depends on `Brain Area`.
+The first reason is each session has different number of brain area was used their success rate is indicated differently.
+The second reason is each mouse has the different success rate even though it is the same mouse. In addition, the smaller number of brain used shows the higher success rate, for example, between session 5 and session 6.
+
+- The second assumption is `Spikes` is the main covariate.
+The first reason is each mouse has different genotypes and we don't know which mouse is a female or male, according to "Distributed coding of choice, action and engagement across the mouse brain." Because of their genetically difference, I think I can't distinguish them separately and should treat them together to find a common. One of the ways to treat them together is by using 'spikes' because each session's each trial is conducted in the same.
+
+First of all, to check my first assumption, I'm going to find an average of spikes across neurons that live in the same area. The below outcome is the average spikes in each session's brain area used during the first trial.
+```{r}
+num = 1 # session starts from 1
+
+
+# Get information of each session brain area and average spks
+for (i in 1:18){
+  i.s = i
+  i.t = 1 # indicator for this trial 
+
+  spk.trial = session[[i.s]]$spks[[i.t]]
+  area=session[[i.s]]$brain_area
+
+# We need to first calculate the number of spikes for each neuron during this trial 
+  spk.count=apply(spk.trial,1,sum)
+
+# for(i in 1:dim(spk.trial)[1]){
+#  spk.count[i]=sum(spk.trial[i,])
+# }
+
+# Next we take the average of spikes across neurons that live in the same area 
+
+# You can use tapply() or group_by() in dplyr
+
+# tapply():
+  spk.average.tapply=tapply(spk.count, area, mean)
+  sss = tapply(spk.count, area, mean)
+  message("Session ", num)
+  num = num + 1
+  print(spk.average.tapply)
+  
+}
+
+```
+Despite above result does not include whole trials in each session (just for 1st trial), it is good to know the average of spikes across neurons that live in the same area. From the above the __Table 3__,`root` in from __Session 1__ to __Session 3__ shows different average spikes (0.500, 1.538, 1.167) even though it is the same mouse. However, since the table is for just 1 trial, I can't generalize my finding to other brain areas too. In this respect, I'm going to make a table for average spikes among all trials in each session's brain areas. 
+***
+
+# Data Integration
+```{r}
+# Function to calculate average spikes per area over trials
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+par(mfrow=c(1,3))
+# For Cori
+# For session 1
+i.s =  1
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+# Create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[[i.t]],
+                        session[[i.s]]$contrast_right[[i.t]], i.t)      # Change
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.1 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,4), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.1[[i]],x=trial.summary.1$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.1$id, trial.summary.1[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.1)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.7
+)
+
+
+i.s =  2
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+# Create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.2 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.2[[i]],x=trial.summary.2$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.2$id, trial.summary.2[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.2)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.7
+)
+
+# For session 3
+i.s =  3
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.3 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,8), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.3[[i]],x=trial.summary.3$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.3$id, trial.summary.3[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.3)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.7
+)
+
+
+par(mfrow = c(1,1))
+dif.3 <- max(trial.summary.3$LP) - mean(trial.summary.3$LP)
+
+```
+
+Above three plots are for __Cori__'s average spikes per area over trials. __Session 1__ shows overall brain areas have a negative linear relationship with `Average Spikes Counts`. However, __Session 2__ and __Session 3__ are different. In contrast to __Session 1__, __Session 2__ and __Session 3__ plots show there are some volatilities in average spikes per area. Especially, `root` in Session 2 seems a volatility, on the other hand, `root` in Session 1 and 3 seem constant. Among three sessions, `LP` in __Session 3__ seems bigger difference between its max and average (`r dif.3`)
+
+```{r}
+# For Forssmann
+par(mfrow=c(1,2))
+# For session 4
+i.s =  4
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.4 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.4[[i]],x=trial.summary.4$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.4$id, trial.summary.4[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.4)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+
+# For session 5
+i.s =  5
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.5 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,2.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.5[[i]],x=trial.summary.5$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.5$id, trial.summary.5[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.5)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.4
+)
+
+# Session 6
+i.s =  6
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.6 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,2.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.6[[i]],x=trial.summary.6$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.6$id, trial.summary.6[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.6)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.6
+)
+
+# Session 7
+i.s =  7
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary.7 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,4.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.7[[i]],x=trial.summary.7$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.7$id, trial.summary.7[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.7)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+par(mfrow=c(1,1))
+
+# VPL
+# root 5
+#CA1
+
+```
+
+Above 4 plots are for __Forssmann__. These plots also show some brain areas seem linearity, however, some brain areas seem volatilities. __Session 4__ shows average spikes per all brain area are getting closer. On the other hand, __Session 7__ shows average spikes are getting dispersed over trials. Additionally, there is a noticeable brain area in each session. In __Session 4__, `VPL` shows high volatility over trials rather than others. In __Session 5__, average spikes in `root` start from the highest but it seems huge decrease. In __Session 6__, `CA1` reacts the highest among other brain areas.
+
+
+```{r}
+# For Hench
+par(mfrow=c(1,2))
+# Session 8
+i.s =  8
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.8 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,15), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.8[[i]],x=trial.summary.8$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.8$id, trial.summary.8[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.8)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+# Big volatility in LSr
+
+# Session 9
+i.s =  9
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.9 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,7), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.9[[i]],x=trial.summary.9$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.9$id, trial.summary.9[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.9)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.35
+)
+
+
+# Session 10
+i.s =  10
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+trial.summary.10 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,4), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.10[[i]],x=trial.summary.10$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.10$id, trial.summary.10[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.10)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+
+
+# Session 11
+i.s =  11
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.11 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,10), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.11[[i]],x=trial.summary.11$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.11$id, trial.summary.11[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.11)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.7
+)
+par(mfrow=c(1,1))
+#LSr
+
+dif.4 <- max(trial.summary.4$LSr) - mean(trial.summary.4$LSr)
+dif.8 <- max(trial.summary.8$LSr) - mean(trial.summary.8$LSr)
+dif.11 <- max(trial.summary.11$LSr) - mean(trial.summary.11$LSr)
+dif.8.LP <- max(trial.summary.8$LP) - mean(trial.summary.8$LP)
+
+#summary(trial.summary.9)
+# VPL
+```
+
+
+Above 4 plots are for __Hench__. According to these plots, we can divide two types of average spikes per area. The first type is lines of average spike per area is close together in __Session 8__ and __Session 11__. However, __Session 9__ and __Session 10__ show constant difference between each line even though they show not linearlity. Additionally, the maximum average spikes in brain area `LSr` in Session 8 and Session 11 are very higher compared to its `LSr` mean. This phenomenon is differ to `LSr` in __Session 4__ because the difference between maximum and mean of `LSr` in __Session 4__ (`r dif.4`) is not bigger as much as __Session 8__ (`r dif.8`)and __Session 11__ (`r dif.11`). And the pattern of `VPL` is very similar to `TT` in _Session 9__.
+
+Additionally, `LP` in __Session 3__ seems bigger difference between its max and average (`r dif.3`), on the other hand, __Session 8__'s `LP` does not show bigger difference (`r dif.8.LP`) 
+
+
+
+```{r}
+# For Lederberg
+
+par(mfrow=c(1,2))
+
+# Session 12
+i.s =  12
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.12 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,7), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.12[[i]],x=trial.summary.12$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.12$id, trial.summary.12[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.12)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.35
+)
+
+
+# Session 13
+i.s =  13
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.13 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,11.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.13[[i]],x=trial.summary.13$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.13$id, trial.summary.13[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.13)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.4
+)
+
+# ???
+
+
+# Session 14
+i.s =  14
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.14 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.14[[i]],x=trial.summary.14$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.14$id, trial.summary.14[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.14)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+
+
+# Session 15
+i.s =  15
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+trial.summary.15 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,11.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.15[[i]],x=trial.summary.15$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.15$id, trial.summary.15[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.15)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.5
+)
+# Volatility CA3
+
+
+par(mfrow = c(1,3))
+# Session 16
+i.s =  16
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.16 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,3), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.16[[i]],x=trial.summary.16$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.16$id, trial.summary.16[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.16)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+
+
+# Session 17
+i.s =  17
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.17 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,6.5), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.17[[i]],x=trial.summary.17$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.17$id, trial.summary.17[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.17)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+# LD
+
+
+# Session 18
+i.s =  18
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+
+trial.summary.18 <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0,3), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary.18[[i]],x=trial.summary.18$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary.18$id, trial.summary.18[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary.18)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+par(mfrow=c(1,1))
+
+
+#summary(trial.summary.13) # RN
+#summary(trial.summary.14) # MRN
+
+
+```
+
+Above 7 plots are for the average spikes per area for __Lederberg__. According to these plots, there is one noticeable characteristic that one or two brain areas are different than others. __Session 13__ and __Session 14__ show a little bit similar result. Each has one line which is located the top. They are `RN` and `MRN`. Other areas except for `RN` in Session 13 show a constant even though there are some volatilities. Session 14 is also the same. Except for `MRN`, other areas show constant between 50 and 250 trials even though there are some volatilities.In __Session 17__, `LD` and  `VPL` show a positive relationship from 90 trials.  
+
+
+In summary, 
+
+- We don't know which mouse is male or female.
+- It seems there is some correlations among areas. 
+- Depend on a group of brain areas, a brain area can be dominated or not dominated 
+
+In this respect, I think it would be better conducting prediction using each session to minimize an error from gathering many brain areas. And it would be also helpful to ignore a mouse sex is whether male or female. Furthermore, I want to conduct one more prediction with average spikes per trials among all sessions. According to the original dataset information, `spks` is a time involving dataset. Thus, I think it is important to use the time characteristics to predict a `feedback`. Hencem my integrated dataset would be two. 
+
+- 1. Prediction model using each session. 
+- 2. Prediction model using average spikes over all trials among all sessions.
+
+***
+
+# Predictive Modeling
+```{r}
+# Data Integration
+## session ID, mouse name, trial ID, left contrast, right contrast, scalar, proportion of active neuron, firing rate, and feedback type
+# Get rid of proportion and std each session's firing rate
+
+my.table <- matrix(nrow = 40*114, ncol = 46) # In session 1, 114 trials and each trial consists of 40 times experiments
+colnames(my.table) <- c("Session ID", 
+                        "Mouse", 
+                        "Trial", 
+                        "Feedback",
+                        "Contrast_left", "Contrast_right", 
+                        "Firing Rate 1","Firing Rate 2","Firing Rate 3","Firing Rate 4","Firing Rate 5","Firing Rate 6","Firing Rate 7","Firing Rate 8","Firing Rate 9","Firing Rate 10","Firing Rate 11","Firing Rate 12","Firing Rate 13","Firing Rate 14","Firing Rate 15","Firing Rate 16","Firing Rate 17","Firing Rate 18","Firing Rate 19","Firing Rate 20","Firing Rate 21","Firing Rate 22","Firing Rate 23","Firing Rate 24","Firing Rate 25","Firing Rate 26","Firing Rate 27","Firing Rate 28","Firing Rate 29","Firing Rate 30","Firing Rate 31","Firing Rate 32","Firing Rate 33","Firing Rate 34","Firing Rate 35","Firing Rate 36","Firing Rate 37","Firing Rate 38","Firing Rate 39","Firing Rate 40")
+
+# Session 1
+n.trial.1 = length(session[[1]]$feedback_type)
+for(i in 1:n.trial.1){
+  spks.trial=session[[1]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(1, session[[1]]$mouse_name, i, session[[1]]$feedback_type[[i]], session[[1]]$contrast_left[[i]], session[[1]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+my.table = na.omit(my.table)
+
+
+#Session 2
+n.trial.2 = length(session[[2]]$feedback_type)
+for(i in 1:n.trial.2){
+  spks.trial=session[[2]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(2, session[[2]]$mouse_name, i, session[[2]]$feedback_type[[i]], session[[2]]$contrast_left[[i]], session[[2]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+
+# Session 3
+n.trial.3 = length(session[[3]]$feedback_type)
+for(i in 1:n.trial.3){
+  spks.trial=session[[3]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(3, session[[3]]$mouse_name, i, session[[3]]$feedback_type[[i]], session[[3]]$contrast_left[[i]], session[[3]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+
+# Session 4
+n.trial.4 = length(session[[4]]$feedback_type)
+for(i in 1:n.trial.4){
+  spks.trial=session[[4]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(4, session[[4]]$mouse_name, i, session[[4]]$feedback_type[[i]], session[[4]]$contrast_left[[i]], session[[4]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+
+
+# Session 5
+n.trial.5 = length(session[[5]]$feedback_type)
+for(i in 1:n.trial.5){
+  spks.trial=session[[5]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(5, session[[5]]$mouse_name, i, session[[5]]$feedback_type[[i]], session[[5]]$contrast_left[[i]], session[[5]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+
+# Session 6
+n.trial.6 = length(session[[6]]$feedback_type)
+for(i in 1:n.trial.6){
+  spks.trial=session[[6]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(6, session[[6]]$mouse_name, i, session[[6]]$feedback_type[[i]], session[[6]]$contrast_left[[i]], session[[6]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 7
+n.trial.7 = length(session[[7]]$feedback_type)
+for(i in 1:n.trial.7){
+  spks.trial=session[[7]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(7, session[[7]]$mouse_name, i, session[[7]]$feedback_type[[i]], session[[7]]$contrast_left[[i]], session[[7]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 8
+n.trial.8 = length(session[[8]]$feedback_type)
+for(i in 1:n.trial.8){
+  spks.trial=session[[8]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(8, session[[8]]$mouse_name, i, session[[8]]$feedback_type[[i]], session[[8]]$contrast_left[[i]], session[[8]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 9
+n.trial.9 = length(session[[9]]$feedback_type)
+for(i in 1:n.trial.9){
+  spks.trial=session[[9]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(9, session[[9]]$mouse_name, i, session[[9]]$feedback_type[[i]], session[[9]]$contrast_left[[i]], session[[9]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 10
+n.trial.10 = length(session[[10]]$feedback_type)
+for(i in 1:n.trial.10){
+  spks.trial=session[[10]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(10, session[[10]]$mouse_name, i, session[[10]]$feedback_type[[i]], session[[10]]$contrast_left[[i]], session[[10]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 11
+n.trial.11 = length(session[[11]]$feedback_type)
+for(i in 1:n.trial.11){
+  spks.trial=session[[11]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(11, session[[11]]$mouse_name, i, session[[11]]$feedback_type[[i]], session[[11]]$contrast_left[[i]], session[[11]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 12
+n.trial.12 = length(session[[12]]$feedback_type)
+for(i in 1:n.trial.12){
+  spks.trial=session[[12]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(12, session[[12]]$mouse_name, i, session[[12]]$feedback_type[[i]], session[[12]]$contrast_left[[i]], session[[12]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 13
+n.trial.13 = length(session[[13]]$feedback_type)
+for(i in 1:n.trial.13){
+  spks.trial=session[[13]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(13, session[[13]]$mouse_name, i, session[[13]]$feedback_type[[i]], session[[13]]$contrast_left[[i]], session[[13]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 14
+n.trial.14 = length(session[[14]]$feedback_type)
+for(i in 1:n.trial.14){
+  spks.trial=session[[14]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(14, session[[14]]$mouse_name, i, session[[14]]$feedback_type[[i]], session[[14]]$contrast_left[[i]], session[[14]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 15
+n.trial.15 = length(session[[15]]$feedback_type)
+for(i in 1:n.trial.15){
+  spks.trial=session[[15]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(15, session[[15]]$mouse_name, i, session[[15]]$feedback_type[[i]], session[[15]]$contrast_left[[i]], session[[15]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 16
+n.trial.16 = length(session[[16]]$feedback_type)
+for(i in 1:n.trial.16){
+  spks.trial=session[[16]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(16, session[[16]]$mouse_name, i, session[[16]]$feedback_type[[i]], session[[16]]$contrast_left[[i]], session[[16]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 17
+n.trial.17 = length(session[[17]]$feedback_type)
+for(i in 1:n.trial.17){
+  spks.trial=session[[17]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(17, session[[17]]$mouse_name, i, session[[17]]$feedback_type[[i]], session[[17]]$contrast_left[[i]], session[[17]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+# Session 18
+n.trial.18 = length(session[[18]]$feedback_type)
+for(i in 1:n.trial.18){
+  spks.trial=session[[18]]$spks[[i]]   
+  total.spikes=apply(spks.trial,1,sum)
+  firing.rate = apply(spks.trial,2,mean)
+  firing.rate = scale(firing.rate)
+  row = c(18, session[[18]]$mouse_name, i, session[[18]]$feedback_type[[i]], session[[18]]$contrast_left[[i]], session[[18]]$contrast_right[[i]], firing.rate)
+  my.table = rbind(my.table, c(row))
+}
+
+test <- my.table
+test = na.omit(test)
+test = as_tibble(test)
+
+test$`Session ID` = as.numeric(as.character(test$`Session ID`))
+test$Trial = as.numeric(as.character(test$Trial))
+test$Contrast_left = as.double(as.character(test$Contrast_left))
+test$Contrast_right = as.double(as.character(test$Contrast_right))
+test$Feedback = as.numeric(as.character(test$Feedback))
+test$`Firing Rate 1` = as.double(as.character(test$`Firing Rate 1`))
+test$`Firing Rate 2` = as.double(as.character(test$`Firing Rate 2`))
+test$`Firing Rate 3` = as.double(as.character(test$`Firing Rate 3`))
+test$`Firing Rate 4` = as.double(as.character(test$`Firing Rate 4`))
+test$`Firing Rate 5` = as.double(as.character(test$`Firing Rate 5`))
+test$`Firing Rate 6` = as.double(as.character(test$`Firing Rate 6`))
+test$`Firing Rate 7` = as.double(as.character(test$`Firing Rate 7`))
+test$`Firing Rate 8` = as.double(as.character(test$`Firing Rate 8`))
+test$`Firing Rate 9` = as.double(as.character(test$`Firing Rate 9`))
+test$`Firing Rate 10` = as.double(as.character(test$`Firing Rate 10`))
+
+test$`Firing Rate 11` = as.double(as.character(test$`Firing Rate 11`))
+test$`Firing Rate 12` = as.double(as.character(test$`Firing Rate 12`))
+test$`Firing Rate 13` = as.double(as.character(test$`Firing Rate 13`))
+test$`Firing Rate 14` = as.double(as.character(test$`Firing Rate 14`))
+test$`Firing Rate 15` = as.double(as.character(test$`Firing Rate 15`))
+test$`Firing Rate 16` = as.double(as.character(test$`Firing Rate 16`))
+test$`Firing Rate 17` = as.double(as.character(test$`Firing Rate 17`))
+test$`Firing Rate 18` = as.double(as.character(test$`Firing Rate 18`))
+test$`Firing Rate 19` = as.double(as.character(test$`Firing Rate 19`))
+test$`Firing Rate 20` = as.double(as.character(test$`Firing Rate 20`))
+
+test$`Firing Rate 21` = as.double(as.character(test$`Firing Rate 21`))
+test$`Firing Rate 22` = as.double(as.character(test$`Firing Rate 22`))
+test$`Firing Rate 23` = as.double(as.character(test$`Firing Rate 23`))
+test$`Firing Rate 24` = as.double(as.character(test$`Firing Rate 24`))
+test$`Firing Rate 25` = as.double(as.character(test$`Firing Rate 25`))
+test$`Firing Rate 26` = as.double(as.character(test$`Firing Rate 26`))
+test$`Firing Rate 27` = as.double(as.character(test$`Firing Rate 27`))
+test$`Firing Rate 28` = as.double(as.character(test$`Firing Rate 28`))
+test$`Firing Rate 29` = as.double(as.character(test$`Firing Rate 29`))
+test$`Firing Rate 30` = as.double(as.character(test$`Firing Rate 30`))
+
+test$`Firing Rate 31` = as.double(as.character(test$`Firing Rate 31`))
+test$`Firing Rate 32` = as.double(as.character(test$`Firing Rate 32`))
+test$`Firing Rate 33` = as.double(as.character(test$`Firing Rate 33`))
+test$`Firing Rate 34` = as.double(as.character(test$`Firing Rate 34`))
+test$`Firing Rate 35` = as.double(as.character(test$`Firing Rate 35`))
+test$`Firing Rate 36` = as.double(as.character(test$`Firing Rate 36`))
+test$`Firing Rate 37` = as.double(as.character(test$`Firing Rate 37`))
+test$`Firing Rate 38` = as.double(as.character(test$`Firing Rate 38`))
+test$`Firing Rate 39` = as.double(as.character(test$`Firing Rate 39`))
+test$`Firing Rate 40` = as.double(as.character(test$`Firing Rate 40`))
+
+
+integ.data = test # for the logistic regression
+
+
+```
+
+My first prediction model is information in each session. My dependent variable would be `feedback` and each brain areas and `Contrast_left` and `Contrast_right` would be my covariates. And I'm going to use __K-Nearest Neighbors__ method because it has an advantage of robust on noisy data and I want to predict `feedback` using feature similarities from brain areas. 
+For the second prediction model, I make a dataset `integ.data` which includes firing rates from 1 to 40 (# of time in `spks`) with contrast left and right. `feedback` would be my dependent variable and Firing Rate from 1 to 40, `Contrast_left`, `Contrast_right` would be my covariates. Since it has lots of covariates, I'm going to use logistic regression.
+
+I used scale function to standardize average spikes over trials in both prediction models. The main reason is to get rid  of the effect of larger scale than others would be dominated.
+
+Followings are for the first prediction model.
+
+
+```{r}
+# For the first assumption
+# For K-Nearest Neighbor methods
+# k-nearest neighbors <- distance for the missing brain areas, we calcualte the distance only one the overlaping brai areas across trials
+
+# For Session 1
+set.seed(28)
+
+ses1 <- data.frame(trial.summary.1)
+ses1 <- ses1 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses1[,-9:-12] <- scale(ses1[-9:-12])
+
+
+# Split test set and train set
+ses1.knn <- createDataPartition(ses1$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses1.test <- ses1[-ses1.knn,] # 20% of data for test (-)
+ses1.train <- ses1[ses1.knn,] # 80% of data for training
+
+#head(ses1.train)
+# Compute k-value
+
+
+fit.ses1.knn <- knn(ses1.train[,-11:-12], ses1.test[,-11:-12], cl=ses1.train$feedback, k=8, prob = TRUE)
+conf1 <- table(list(predicted = fit.ses1.knn, observed=ses1.test$feedback))
+caret::confusionMatrix(conf1)$overall["Accuracy"]
+
+
+# For Session 2
+set.seed(28)
+
+ses2 <- data.frame(trial.summary.2)
+ses2 <- ses2 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses2[,-6:-9] <- scale(ses2[-6:-9])
+
+# Split test set and train set
+ses2.knn <- createDataPartition(ses2$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses2.test <- ses2[-ses2.knn,] # 20% of data for test
+ses2.train <- ses2[ses2.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses2.knn <- knn(ses2.train[,-8:-9], ses2.test[,-8:-9], cl=ses2.train$feedback, k=2, prob = TRUE)
+conf2 <- table(list(predicted = fit.ses2.knn, observed=ses2.test$feedback))
+caret::confusionMatrix(conf2)$overall["Accuracy"]
+
+
+
+# For Session 3
+set.seed(28)
+
+ses3 <- data.frame(trial.summary.3)
+ses3 <- ses3 %>% relocate(feedback, .after=right.contr.)
+
+
+
+
+# Scale it
+
+ses3[,-12:-15] <- scale(ses3[-12:-15])
+
+
+# Split test set and train set
+ses3.knn <- createDataPartition(ses3$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses3.test <- ses3[-ses3.knn,] # 20% of data for test
+ses3.train <- ses3[ses3.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses3.knn <- knn(ses3.train[,-14:-15], ses3.test[,-14:-15], cl=ses3.train$feedback, k=8, prob = TRUE)
+conf3 <- table(list(predicted = fit.ses3.knn, observed=ses3.test$feedback))
+caret::confusionMatrix(conf3)$overall["Accuracy"]
+
+# For Session 4
+set.seed(28)
+
+ses4 <- data.frame(trial.summary.4)
+ses4 <- ses4 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses4[,-12:-15] <- scale(ses4[-12:-15])
+
+
+# Split test set and train set
+ses4.knn <- createDataPartition(ses4$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses4.test <- ses4[-ses4.knn,] # 20% of data for test
+ses4.train <- ses4[ses4.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses4.knn <- knn(ses4.train[,-14:-15], ses4.test[,-14:-15], cl=ses4.train$feedback, k=7, prob = TRUE)
+conf4 <- table(list(predicted = fit.ses4.knn, observed=ses4.test$feedback))
+caret::confusionMatrix(conf4)$overall["Accuracy"]
+
+
+# For Session 5
+set.seed(28)
+
+ses5 <- data.frame(trial.summary.5)
+ses5 <- ses5 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses5[,-11:-14] <- scale(ses5[-11:-14])
+
+
+# Split test set and train set
+ses5.knn <- createDataPartition(ses5$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses5.test <- ses5[-ses5.knn,] # 20% of data for test
+ses5.train <- ses5[ses5.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses5.knn <- knn(ses5.train[,-13:-14], ses5.test[,-13:-14], cl=ses5.train$feedback, k=4, prob = TRUE)
+conf5 <- table(list(predicted = fit.ses5.knn, observed=ses5.test$feedback))
+caret::confusionMatrix(conf5)$overall["Accuracy"]
+
+# For Session 6
+set.seed(28)
+
+ses6 <- data.frame(trial.summary.6)
+ses6 <- ses6 %>% relocate(feedback, .after=right.contr.)
+
+# Scale it
+
+ses6[,-6:-9] <- scale(ses6[-6:-9])
+
+
+# Split test set and train set
+ses6.knn <- createDataPartition(ses6$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses6.test <- ses6[-ses6.knn,] # 20% of data for test
+ses6.train <- ses6[ses6.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses6.knn <- knn(ses6.train[,-8:-9], ses6.test[,-8:-9], cl=ses6.train$feedback, k=11, prob = TRUE)
+conf6 <- table(list(predicted = fit.ses6.knn, observed=ses6.test$feedback))
+caret::confusionMatrix(conf6)$overall["Accuracy"]
+
+# For Session 7
+set.seed(28)
+
+ses7 <- data.frame(trial.summary.7)
+ses7 <- ses7 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses7[,-9:-12] <- scale(ses7[-9:-12])
+
+
+# Split test set and train set
+ses7.knn <- createDataPartition(ses7$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses7.test <- ses7[-ses7.knn,] # 20% of data for test
+ses7.train <- ses7[ses7.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses7.knn <- knn(ses7.train[,-11:-12], ses7.test[,-11:-12], cl=ses7.train$feedback, k=4, prob = TRUE)
+conf7 <- table(list(predicted = fit.ses7.knn, observed=ses7.test$feedback))
+caret::confusionMatrix(conf7)$overall["Accuracy"]
+
+# For Session 8
+set.seed(28)
+
+ses8 <- data.frame(trial.summary.8)
+ses8 <- ses8 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses8[,-16:-19] <- scale(ses8[-16:-19])
+
+
+# Split test set and train set
+ses8.knn <- createDataPartition(ses8$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses8.test <- ses8[-ses8.knn,] # 20% of data for test
+ses8.train <- ses8[ses8.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses8.knn <- knn(ses8.train[,-18:-19], ses8.test[,-18:-19], cl=ses8.train$feedback, k=14, prob = TRUE)
+conf8 <- table(list(predicted = fit.ses8.knn, observed=ses8.test$feedback))
+caret::confusionMatrix(conf8)$overall["Accuracy"]
+
+# For Session 9
+set.seed(28)
+
+ses9 <- data.frame(trial.summary.9)
+ses9 <- ses9 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses9[,-13:-16] <- scale(ses9[-13:-16])
+
+
+# Split test set and train set
+ses9.knn <- createDataPartition(ses9$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses9.test <- ses9[-ses9.knn,] # 20% of data for test
+ses9.train <- ses9[ses9.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses9.knn <- knn(ses9.train[,-15:-16], ses9.test[,-15:-16], cl=ses9.train$feedback, k=7, prob = TRUE)
+conf9 <- table(list(predicted = fit.ses9.knn, observed=ses9.test$feedback))
+caret::confusionMatrix(conf9)$overall["Accuracy"]
+
+# For Session 10
+set.seed(28)
+
+ses10 <- data.frame(trial.summary.10)
+ses10 <- ses10 %>% relocate(feedback, .after=right.contr.)
+
+# Scale it
+
+ses10[,-14:-17] <- scale(ses10[-14:-17])
+
+
+# Split test set and train set
+ses10.knn <- createDataPartition(ses10$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses10.test <- ses10[-ses10.knn,] # 20% of data for test
+ses10.train <- ses10[ses10.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses10.knn <- knn(ses10.train[,-16:-17], ses10.test[,-16:-17], cl=ses10.train$feedback, k=6, prob = TRUE)
+conf10 <- table(list(predicted = fit.ses10.knn, observed=ses10.test$feedback))
+caret::confusionMatrix(conf10)$overall["Accuracy"]
+
+
+# For Session 11
+set.seed(28)
+
+ses11 <- data.frame(trial.summary.11)
+ses11 <- ses11 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses11[,-7:-10] <- scale(ses11[-7:-10])
+
+
+# Split test set and train set
+ses11.knn <- createDataPartition(ses11$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses11.test <- ses11[-ses11.knn,] # 20% of data for test
+ses11.train <- ses11[ses11.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses11.knn <- knn(ses11.train[,-9:-10], ses11.test[,-9:-10], cl=ses11.train$feedback, k=6, prob = TRUE)
+conf11 <- table(list(predicted = fit.ses11.knn, observed=ses11.test$feedback))
+caret::confusionMatrix(conf11)$overall["Accuracy"]
+
+
+# For Session 12
+set.seed(28)
+
+ses12 <- data.frame(trial.summary.12)
+ses12 <- ses12 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses12[,-13:-16] <- scale(ses12[-13:-16])
+
+
+# Split test set and train set
+ses12.knn <- createDataPartition(ses12$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses12.test <- ses12[-ses12.knn,] # 20% of data for test
+ses12.train <- ses12[ses12.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses12.knn <- knn(ses12.train[,-15:-16], ses12.test[,-15:-16], cl=ses12.train$feedback, k=13, prob = TRUE)
+conf12 <- table(list(predicted = fit.ses12.knn, observed=ses12.test$feedback))
+caret::confusionMatrix(conf12)$overall["Accuracy"]
+
+# For Session 13
+set.seed(28)
+
+ses13 <- data.frame(trial.summary.13)
+ses13 <- ses13 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses13[,-16:-19] <- scale(ses13[-16:-19])
+
+
+# Split test set and train set
+ses13.knn <- createDataPartition(ses13$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses13.test <- ses11[-ses13.knn,] # 20% of data for test
+ses13.train <- ses11[ses13.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses13.knn <- knn(ses13.train[,-18:-19], ses13.test[,-18:-19], cl=ses13.train$feedback, k=10, prob = TRUE)
+conf13 <- table(list(predicted = fit.ses13.knn, observed=ses13.test$feedback))
+caret::confusionMatrix(conf13)$overall["Accuracy"]
+
+# For Session 14
+set.seed(28)
+
+ses14 <- data.frame(trial.summary.14)
+ses14 <- ses14 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses14[,-11:-14] <- scale(ses14[-11:-14])
+
+
+# Split test set and train set
+ses14.knn <- createDataPartition(ses14$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses14.test <- ses11[-ses14.knn,] # 20% of data for test
+ses14.train <- ses11[ses14.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses14.knn <- knn(ses14.train[,-13:-14], ses14.test[,-13:-14], cl=ses14.train$feedback, k=8, prob = TRUE)
+conf14 <- table(list(predicted = fit.ses14.knn, observed=ses14.test$feedback))
+caret::confusionMatrix(conf14)$overall["Accuracy"]
+
+
+# For Session 15
+set.seed(28)
+
+ses15 <- data.frame(trial.summary.15)
+ses15 <- ses15 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses15[,-9:-12] <- scale(ses15[-9:-12])
+
+
+# Split test set and train set
+ses15.knn <- createDataPartition(ses15$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses15.test <- ses15[-ses15.knn,] # 20% of data for test
+ses15.train <- ses15[ses15.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses15.knn <- knn(ses15.train[,-11:-12], ses15.test[,-11:-12], cl=ses15.train$feedback, k=11, prob = TRUE)
+conf15 <- table(list(predicted = fit.ses15.knn, observed=ses15.test$feedback))
+caret::confusionMatrix(conf15)$overall["Accuracy"]
+
+
+# For Session 16
+set.seed(28)
+
+ses16 <- data.frame(trial.summary.16)
+ses16 <- ses16 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses16[,-7:-10] <- scale(ses16[-7:-10])
+
+
+# Split test set and train set
+ses16.knn <- createDataPartition(ses16$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses16.test <- ses16[-ses16.knn,] # 20% of data for test
+ses16.train <- ses16[ses16.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses16.knn <- knn(ses16.train[,-9:-10], ses16.test[,-9:-10], cl=ses16.train$feedback, k=13, prob = TRUE)
+conf16 <- table(list(predicted = fit.ses16.knn, observed=ses16.test$feedback))
+caret::confusionMatrix(conf16)$overall["Accuracy"]
+
+# For Session 17
+set.seed(28)
+
+ses17 <- data.frame(trial.summary.17)
+ses17 <- ses17 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses17[,-7:-10] <- scale(ses17[-7:-10])
+
+
+# Split test set and train set
+ses17.knn <- createDataPartition(ses17$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses17.test <- ses17[-ses17.knn,] # 20% of data for test
+ses17.train <- ses17[ses17.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses17.knn <- knn(ses17.train[,-9:-10], ses17.test[,-9:-10], cl=ses17.train$feedback, k=9, prob = TRUE)
+conf17 <- table(list(predicted = fit.ses17.knn, observed=ses17.test$feedback))
+caret::confusionMatrix(conf17)$overall["Accuracy"]
+
+
+# For Session 18
+set.seed(28)
+
+ses18 <- data.frame(trial.summary.18)
+ses18 <- ses18 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses18[,-11:-14] <- scale(ses18[-11:-14])
+
+
+# Split test set and train set
+ses18.knn <- createDataPartition(ses18$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses18.test <- ses18[-ses18.knn,] # 20% of data for test
+ses18.train <- ses18[ses18.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses18.knn <- knn(ses18.train[,-13:-14], ses18.test[,-13:-14], cl=ses18.train$feedback, k=9, prob = TRUE)
+conf18 <- table(list(predicted = fit.ses18.knn, observed=ses18.test$feedback))
+caret::confusionMatrix(conf18)$overall["Accuracy"]
+
+```
+
+According to the above confusion matrix, the accuracies are 72.73%, 58%, 77.78%, 73.47%, 68%, 79.31%, 66%, 76%, 64.86%, 73.03%, 79.41%, 70.59%, 69.61%, 71.65%, 78.75%, 75%, 81.82%, and 93.02%. The accuracy of Session 2 is lowest and the accuracy in Session 18 is the highest. Additionally, higher success rate in __Table 1__, the higher accuracies in my prediction.
+
+
+
+```{r}
+# For the second assumption
+# Logistic Regression
+integ.data = test
+
+
+
+# Split dataset
+
+set.seed(38)
+
+sample <- sample.int(n = length(integ.data), size = floor(0.8 * length(integ.data)), replace = F)
+train <- integ.data[sample,]
+test <- integ.data[-sample,]
+
+
+#log <-  glm(as.factor(Feedback) ~ Contrast_left + Contrast_right + `Firing Rate 1`+ `Firing Rate 2` + `Firing Rate 3`+ `Firing Rate 4`+`Firing Rate 5`+ `Firing Rate 6` + `Firing Rate 7`+ `Firing Rate 8`+`Firing Rate 9`+ `Firing Rate 10` + `Firing Rate 11`+ `Firing Rate 12`+`Firing Rate 13`+ `Firing Rate 14` + `Firing Rate 15`+ `Firing Rate 16`+`Firing Rate 17`+ `Firing Rate 18` + `Firing Rate 19`+ `Firing Rate 20`+`Firing Rate 21`+ `Firing Rate 22` + `Firing Rate 23`+ `Firing Rate 24`+`Firing Rate 25`+ `Firing Rate 26` + `Firing Rate 27`+ `Firing Rate 28`+`Firing Rate 29`+ `Firing Rate 30` + `Firing Rate 31`+ `Firing Rate 32`+`Firing Rate 33`+ `Firing Rate 34` + `Firing Rate 35`+ `Firing Rate 36`+`Firing Rate 37`+ `Firing Rate 38` + `Firing Rate 39`+ `Firing Rate 40`, family = "binomial", data=integ.data) 
+
+#summary(log)
+
+fit <- glm(as.factor(Feedback) ~ Contrast_left + Contrast_right + `Firing Rate 1`+ `Firing Rate 2` + `Firing Rate 3`+ `Firing Rate 4`+`Firing Rate 5`+ `Firing Rate 6` + `Firing Rate 7`+ `Firing Rate 8`+`Firing Rate 9`+ `Firing Rate 10` + `Firing Rate 11`+ `Firing Rate 12`+`Firing Rate 13`+ `Firing Rate 14` + `Firing Rate 15`+ `Firing Rate 16`+`Firing Rate 17`+ `Firing Rate 18` + `Firing Rate 19`+ `Firing Rate 20`+`Firing Rate 21`+ `Firing Rate 22` + `Firing Rate 23`+ `Firing Rate 24`+`Firing Rate 25`+ `Firing Rate 26` + `Firing Rate 27`+ `Firing Rate 28`+`Firing Rate 29`+ `Firing Rate 30` + `Firing Rate 31`+ `Firing Rate 32`+`Firing Rate 33`+ `Firing Rate 34` + `Firing Rate 35`+ `Firing Rate 36`+`Firing Rate 37`+ `Firing Rate 38` + `Firing Rate 39`+ `Firing Rate 40`, family = "binomial", data=train)
+
+summary(fit)
+
+pred <- predict(fit, test %>% select(-Feedback), response = 'response')
+pred2 <- factor(pred > 0.5, labels = c('-1','1'))
+error <- mean(pred2 != test$Feedback)
+
+pr = prediction(pred, test$Feedback)
+prf2 <- performance(pr, measure = "tpr", x.measrue = "fpr")
+auc2 <- performance(pr, measure = 'auc')
+plot(prf2, ,col = 'red', main = 'ROC curve')
+
+
+```
+
+According to the summary of logistic regression information of `Firing Rate from 34 to 40` is NA, but there is no NA because I get rid of all NAs in advance. Additionally, the error is `r error` which is worse than my first model (over all sessions). In this respect, I'm going to use the first prediction model.
+
+
+
+# Prediction Performance On The Test Sets
+```{r}
+
+test = list()
+
+for(i in 1:2){
+  data <- file.path("C:\\Users\\Geon\\Downloads\\Winter 2024\\STA 141A\\STA141AProject\\Data",paste("test",i,'.rds', sep = ""))
+  test[[i]]=readRDS(data)
+  #print(session[[i]]$mouse_name)
+  #print(session[[i]]$date_exp)
+}
+#test1=readRDS("C:\\Users\\Geon\\Downloads\\Winter 2024\\STA 141A\\STA141AProject\\Data\\test1.rds")
+#summary(test1)
+#test2 = readRDS("C:\\Users\\Geon\\Downloads\\Winter 2024\\STA 141A\\STA141AProject\\Data\\test2.rds")
+#unique(test1$brain_area)
+#unique(test2$brain_area)
+
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+# For Test1 (Same as session 1)
+i.s =  1
+n.trial=length(test[[i.s]]$feedback_type)
+n.area=length(unique(test[[i.s]]$brain_area ))
+
+# Create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = test[[i.s]]),
+                          test[[i.s]]$feedback_type[i.t],
+                        test[[i.s]]$contrast_left[[i.t]],
+                        test[[i.s]]$contrast_right[[i.t]], i.t)      # Change
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = test[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+test1 <- as_tibble(trial.summary)
+
+
+
+# For test 2 (session 18)
+i.s =  2
+n.trial=length(test[[i.s]]$feedback_type)
+n.area=length(unique(test[[i.s]]$brain_area ))
+
+# Create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = test[[i.s]]),
+                          test[[i.s]]$feedback_type[i.t],
+                        test[[i.s]]$contrast_left[[i.t]],
+                        test[[i.s]]$contrast_right[[i.t]], i.t)      # Change
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = test[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+test2 <- as_tibble(trial.summary)
+
+
+# Using prediction model I made, check predict feedback
+
+
+
+# Session 1 prediction model 
+set.seed(28)
+
+ses1 <- data.frame(trial.summary.1)
+ses1 <- ses1 %>% relocate(feedback, .after=right.contr.)
+
+test1 <- data.frame(test1)
+
+# Scale it
+
+ses1[,-9:-12] <- scale(ses1[-9:-12])
+test1[,-9:-12] <- scale(test1[-9:-12])
+
+# Split test set and train set
+ses1.knn <- createDataPartition(ses1$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+ses1.test <- ses1[-ses1.knn,] # 20% of data for test (-)
+ses1.train <- ses1[ses1.knn,] # 80% of data for training
+
+#head(ses1.train)
+# Compute k-value
+
+
+fit.ses1.knn <- knn(ses1.train[,-11:-12], test1[,-11:-12], cl=ses1.train$feedback, k=8, prob = TRUE)
+conf.test1 <- table(list(predicted = fit.ses1.knn, observed=test1$feedback))
+caret::confusionMatrix(conf.test1)$overall["Accuracy"]
+
+
+
+
+
+# Session 18 prediction model
+set.seed(28)
+test2 <- data.frame(test2)
+ses18 <- data.frame(trial.summary.18)
+ses18 <- ses18 %>% relocate(feedback, .after=right.contr.)
+
+
+# Scale it
+
+ses18[,-11:-14] <- scale(ses18[-11:-14])
+test2[,-11:-14] <- scale(test2[-11:-14])
+
+# Split test set and train set
+ses18.knn <- createDataPartition(ses18$feedback, p=0.8, list = FALSE) # I choose 80% as train dataset because the sample size is small in session 1
+
+
+ses18.train <- ses18[ses18.knn,] # 80% of data for training
+
+# Compute k-value
+
+
+fit.ses18.knn <- knn(ses18.train[,-13:-14], test2[,-13:-14], cl=ses18.train$feedback, k=9, prob = TRUE)
+conf.test2 <- table(list(predicted = fit.ses18.knn, observed=test2$feedback))
+caret::confusionMatrix(conf.test2)$overall["Accuracy"]
+
+
+
+
+```
+First of all, to predict the test sets, I open `rds` files. Then, I make a talbe as I did before and then standardized average spikes per are over trials and then predict `feedback`. With my prediction models with the same `k` (8 for Test 1 and 9 for Test 2), I got 63% accuracy from __Test 1__ and 76% accuracy from __Test 2__. Compared to original accuracies, these accuracies lower, however, __Test 2__ accuracy is quite high.
+
+***
+# Discussion
+
+Since the dataset is modified and I'm not majoring in Biology, I don't know what roles of each brain area and which mouse is male or female. If I have more knowledge in Biology and Neuro Science, and if I can distinguish their sex, the accuracy would be higher. And it would be better to conduct one more experiment that why my second prediction model got lower accuracy than the first prediction model because I think using a data involving more information (`time`) might have higher accuracy.
